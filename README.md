@@ -2,10 +2,10 @@
 
 ## 一行安装
 
-把仓库上传到 GitHub 后，把下面命令里的 `你的用户名/你的仓库` 改成真实仓库地址：
+直接复制下面命令安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/你的用户名/你的仓库/main/install.sh -o /tmp/chatbot-install.sh && sudo CHATBOT_RAW_BASE=https://raw.githubusercontent.com/你的用户名/你的仓库/main bash /tmp/chatbot-install.sh
+curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh -o /tmp/chatbot-install.sh && sudo CHATBOT_RAW_BASE=https://raw.githubusercontent.com/vmenzo/chatbot/main bash /tmp/chatbot-install.sh
 ```
 
 按提示输入：
