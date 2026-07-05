@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+banned_users.json
+admin_message_map.json
