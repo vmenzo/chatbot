@@ -5,7 +5,7 @@ APP_DIR="/opt/chatbot"
 SERVICE_NAME="chatbot.service"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 ENV_FILE="/etc/chatbot.env"
-RAW_BASE="${CHATBOT_RAW_BASE:-}"
+RAW_BASE="${CHATBOT_RAW_BASE:-https://raw.githubusercontent.com/vmenzo/chatbot/main}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "请用 root 运行：sudo bash install.sh"
@@ -46,7 +46,7 @@ install_project_file() {
   if [[ -z "${RAW_BASE}" ]]; then
     echo "找不到 ${filename}。"
     echo "如果用 GitHub 一行安装，请这样运行："
-    echo "curl -fsSL https://raw.githubusercontent.com/你的用户名/你的仓库/main/install.sh -o /tmp/chatbot-install.sh && sudo CHATBOT_RAW_BASE=https://raw.githubusercontent.com/你的用户名/你的仓库/main bash /tmp/chatbot-install.sh"
+    echo "sudo bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh)\""
     exit 1
   fi
 

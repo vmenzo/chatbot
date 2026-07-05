@@ -5,7 +5,7 @@
 直接复制下面命令安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh -o /tmp/chatbot-install.sh && sudo CHATBOT_RAW_BASE=https://raw.githubusercontent.com/vmenzo/chatbot/main bash /tmp/chatbot-install.sh
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh)"
 ```
 
 按提示输入：
