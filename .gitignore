@@ -5,3 +5,6 @@ __pycache__/
 .env
 banned_users.json
 admin_message_map.json
+worker/node_modules/
+worker/wrangler.toml
+worker/.wrangler/

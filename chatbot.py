@@ -21,6 +21,12 @@ DATA_DIR = Path(os.environ.get("CHATBOT_DATA_DIR", Path(__file__).resolve().pare
 BAN_FILE = DATA_DIR / "banned_users.json"
 MESSAGE_MAP_FILE = DATA_DIR / "admin_message_map.json"
 ADMIN_DISPLAY_NAME = os.environ.get("ADMIN_DISPLAY_NAME", "").strip()
+CHATBOT_MODE = os.environ.get("CHATBOT_MODE", "polling").strip().lower()
+WEBHOOK_LISTEN = os.environ.get("CHATBOT_WEBHOOK_LISTEN", "0.0.0.0")
+WEBHOOK_PORT = int(os.environ.get("CHATBOT_WEBHOOK_PORT", "8080"))
+WEBHOOK_PATH = os.environ.get("CHATBOT_WEBHOOK_PATH", "telegram").strip("/")
+WEBHOOK_URL = os.environ.get("CHATBOT_WEBHOOK_URL", "").strip()
+WEBHOOK_SECRET = os.environ.get("CHATBOT_WEBHOOK_SECRET", "").strip() or None
 # ==========================================
 
 
@@ -459,7 +465,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 入口 ──────────────────────────────────────
 
-if __name__ == '__main__':
+def build_application():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_error_handler(error_handler)
 
@@ -506,5 +512,29 @@ if __name__ == '__main__':
 
     app.post_init = post_init
 
-    print("机器人已启动 (最终完整版)...", file=sys.stderr, flush=True)
-    app.run_polling()
+    return app
+
+
+if __name__ == '__main__':
+    app = build_application()
+
+    if CHATBOT_MODE == "polling":
+        print("机器人已启动：long polling 模式", file=sys.stderr, flush=True)
+        app.run_polling()
+    elif CHATBOT_MODE == "webhook":
+        if not WEBHOOK_URL:
+            raise RuntimeError("CHATBOT_MODE=webhook 时必须设置 CHATBOT_WEBHOOK_URL")
+        print(
+            f"机器人已启动：webhook 模式，监听 {WEBHOOK_LISTEN}:{WEBHOOK_PORT}/{WEBHOOK_PATH}",
+            file=sys.stderr,
+            flush=True,
+        )
+        app.run_webhook(
+            listen=WEBHOOK_LISTEN,
+            port=WEBHOOK_PORT,
+            url_path=WEBHOOK_PATH,
+            webhook_url=WEBHOOK_URL,
+            secret_token=WEBHOOK_SECRET,
+        )
+    else:
+        raise RuntimeError("CHATBOT_MODE 只能是 polling 或 webhook")

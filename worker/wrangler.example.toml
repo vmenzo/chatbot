@@ -1,0 +1,7 @@
+name = "telegram-chatbot"
+main = "src/index.js"
+compatibility_date = "2026-07-01"
+
+[[kv_namespaces]]
+binding = "CHATBOT_KV"
+id = "replace_with_kv_namespace_id"
