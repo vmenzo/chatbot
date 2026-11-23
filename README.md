@@ -46,10 +46,10 @@
 
 ### 安装
 
-直接复制下面命令安装：
+直接复制下面命令安装（先下载到临时文件，下载成功才执行；直接用 `bash -c "$(curl ...)"` 的写法下载失败时会静默退出、退出码还是 0，看起来像装完了，实际什么都没装）：
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh -o /tmp/chatbot-install.sh && sudo bash /tmp/chatbot-install.sh
 ```
 
 安装脚本分 8 步走完，全程有中文提示：
@@ -123,7 +123,21 @@ systemctl daemon-reload
 
 ## 方式二：Python 手动运行（不用安装脚本）
 
-如果你不想用安装脚本，也可以自己准备环境变量后直接运行。需要的环境变量（也可以参考仓库里的 `.env.example`）：
+如果你不想用安装脚本，也可以自己准备环境变量后直接运行。先装依赖（建议先建虚拟环境，`python3 -m venv venv` 再 `source venv/bin/activate`）：
+
+```bash
+pip install -r requirements.txt
+```
+
+webhook 模式还要多装一个：
+
+```bash
+pip install -r requirements-webhook.txt
+```
+
+不装依赖直接跑会报 `ModuleNotFoundError: No module named 'telegram'`。
+
+需要的环境变量（也可以参考仓库里的 `.env.example`）：
 
 | 环境变量 | 说明 | 默认值 |
 | --- | --- | --- |
@@ -225,7 +239,7 @@ npx wrangler tail
 bash deploy.sh
 
 # 删除 Worker
-npx wrangler delete telegram-chatbot
+npx wrangler delete --name telegram-chatbot
 ```
 
 ### 手动部署
@@ -313,6 +327,10 @@ curl "https://api.telegram.org/bot<你的Token>/getWebhookInfo"
 
 - Python 版：改 `/etc/chatbot.env`，再 `systemctl restart chatbot.service`。
 - Workers 版：重新跑一次 `bash deploy.sh`，或单独改一项：`npx wrangler secret put TELEGRAM_BOT_TOKEN`。
+
+**换 Webhook Secret 怎么办？**
+
+Secret 既放在 webhook 地址的路径末尾，也作为 `secret_token` 传给 Telegram，轮换时两处要一起换。最省事是重新跑一次 `bash deploy.sh`，Secret 那一步留空就会自动生成新的并同步好；不要只改一处。
 
 **管理员回复没有转给用户？**
 
