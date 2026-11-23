@@ -177,6 +177,14 @@ cd worker
 bash deploy.sh
 ```
 
+如果本地还没有仓库代码，先用下面这一条命令拉下来、进目录、部署一次做完：
+
+```bash
+git clone https://github.com/vmenzo/chatbot.git && cd chatbot/worker && bash deploy.sh
+```
+
+没有 git 也可以去仓库页面下载 ZIP，解压后进 `worker` 目录跑 `bash deploy.sh`。
+
 部署脚本分 9 步走完，全程有中文提示：
 
 1. 检查运行环境（Node.js、npm、curl）

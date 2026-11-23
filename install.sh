@@ -14,7 +14,7 @@
 #   6. 写入配置文件（Token 等敏感信息只保存在本机）
 #   7. 注册 systemd 服务并启动机器人
 #
-# 适用系统：Debian 11+ / Ubuntu 20.04+（需要 systemd，需要 root 权限）
+# 适用系统：Debian 11+ / Ubuntu 22.04+（需要 Python 3.9+，需要 systemd，需要 root 权限）
 #
 # 使用方法：
 #
@@ -80,7 +80,7 @@ ok "当前用户是 root"
 
 # 必须有 systemd：机器人靠 systemd 实现开机自启和异常重启。
 if ! command -v systemctl >/dev/null 2>&1; then
-  die "没有找到 systemctl，本脚本需要带 systemd 的系统（Debian 11+ / Ubuntu 20.04+）"
+  die "没有找到 systemctl，本脚本需要带 systemd 的系统（Debian 11+ / Ubuntu 22.04+）"
 fi
 ok "已找到 systemd"
 
