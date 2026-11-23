@@ -143,9 +143,12 @@ async function handleUserMessage(message, env) {
   if (await getJson(env, "paused", false)) return;
   if ((await getBannedUsers(env)).includes(message.from.id)) return;
 
-  const displayName = `${escapeHtml(message.from.first_name || "")}${message.from.username ? ` (@${escapeHtml(message.from.username)})` : ""}`.trim();
+  const firstName = escapeHtml(message.from.first_name || "");
+  const usernameText = message.from.username ? ` (@${escapeHtml(message.from.username)})` : "";
   const msgTime = new Date((message.date + 8 * 60 * 60) * 1000).toISOString().slice(0, 19).replace("T", " ");
-  let adminText = `<blockquote>用户：${displayName}\n用户ID：${message.from.id}\n时间：${msgTime}</blockquote>`;
+  // 卡片：名字（可点击链接）+ 时间，和 Python 版一致；不显示用户 ID，
+  // 回复找人靠 KV 消息映射表，不靠卡片里的文字。
+  let adminText = `<b><a href='tg://user?id=${message.from.id}'>${firstName}</a></b>${usernameText}\n<code>${msgTime}</code>`;
   const content = message.text || message.caption;
   if (content) adminText += `\n${escapeHtml(content)}`;
 
