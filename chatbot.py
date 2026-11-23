@@ -393,10 +393,12 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     beijing_time = update.message.date + timedelta(hours=8)
     msg_time = beijing_time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # 卡片：名字 + 引用框，避免 pre 代码块的等宽文字样式。
-    display_name = f"{first_name} {username_text}".strip()
-    card_text = f"用户：{display_name}\n用户ID：{user.id}\n时间：{msg_time}"
-    admin_text = f"<blockquote>{card_text}</blockquote>"
+    # 卡片：名字（可点击链接）+ 时间；不显示用户 ID，
+    # 回复找人靠消息 ID 映射表，不靠卡片里的文字。
+    admin_text = (
+        f"<b><a href='tg://user?id={user.id}'>{first_name}</a></b> {username_text}\n"
+        f"<code>{msg_time}</code>"
+    )
 
     if update.message.text or update.message.caption:
         content = update.message.text or update.message.caption
