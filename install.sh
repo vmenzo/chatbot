@@ -8,18 +8,21 @@
 #
 #   1. 检查运行环境（root 权限、systemd、网络工具）
 #   2. 收集必要配置（Bot Token、管理员 ID、部署模式）
-#   3. 安装系统依赖（Python 3、虚拟环境工具等）
-#   4. 下载程序文件（chatbot.py 及依赖清单）
-#   5. 创建 Python 虚拟环境并安装依赖
-#   6. 写入配置文件（Token 等敏感信息只保存在本机）
-#   7. 注册 systemd 服务并启动机器人
+#   3. 安装前确认（先给你看一张汇总表，确认了才动手）
+#   4. 安装系统依赖（Python 3、虚拟环境工具等）
+#   5. 下载程序文件（chatbot.py 及依赖清单）
+#   6. 创建 Python 虚拟环境并安装依赖
+#   7. 写入配置文件（Token 等敏感信息只保存在本机）
+#   8. 注册 systemd 服务并启动机器人
 #
 # 适用系统：Debian 11+ / Ubuntu 22.04+（需要 Python 3.9+，需要 systemd，需要 root 权限）
 #
 # 使用方法：
 #
-#   一行安装（推荐）：
-#     sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh)"
+#   一行安装（推荐）：先下载到临时文件，下载成功才执行——
+#   直接用 bash -c "$(curl ...)" 的写法下载失败时会静默退出、退出码还是 0，
+#   看起来像装完了，实际什么都没装。
+#     curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh -o /tmp/chatbot-install.sh && sudo bash /tmp/chatbot-install.sh
 #
 #   本地安装（已下载仓库时）：
 #     sudo bash install.sh
@@ -139,6 +142,8 @@ echo "     2) webhook"
 echo "        Telegram 把消息推送到你的服务器。需要一个公网 HTTPS 域名，"
 echo "        并且能反向代理到本机端口，适合已有域名的服务器。"
 read -r -p "     请选择 [1/2，默认 1]: " MODE_CHOICE || die "输入被中断，安装已取消"
+# 去掉输入里的空格，避免 "1 " 这种带空格的输入直接报错
+MODE_CHOICE="${MODE_CHOICE//[[:space:]]/}"
 
 CHATBOT_MODE="polling"
 WEBHOOK_LISTEN="0.0.0.0"
@@ -161,14 +166,21 @@ case "${MODE_CHOICE:-1}" in
     WEBHOOK_LISTEN="${WEBHOOK_LISTEN_INPUT:-0.0.0.0}"
     WEBHOOK_PORT="${WEBHOOK_PORT_INPUT:-8080}"
     WEBHOOK_PATH="${WEBHOOK_PATH_INPUT:-telegram}"
+    # 去掉输入里的空格，并做个格式检查，填错了马上发现，不用到启动时才暴露。
+    WEBHOOK_LISTEN="${WEBHOOK_LISTEN//[[:space:]]/}"
+    WEBHOOK_PORT="${WEBHOOK_PORT//[[:space:]]/}"
+    WEBHOOK_PATH="${WEBHOOK_PATH//[[:space:]]/}"
+    if ! [[ "${WEBHOOK_LISTEN}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+      die "本机监听地址格式不对，请填写 IP 或主机名"
+    fi
+    if ! [[ "${WEBHOOK_PORT}" =~ ^[0-9]+$ ]] || (( WEBHOOK_PORT < 1 || WEBHOOK_PORT > 65535 )); then
+      die "Webhook 端口必须是 1-65535 的数字"
+    fi
     # 去掉路径首尾多余的斜杠，例如 "/telegram/" 写成 "telegram"。
     WEBHOOK_PATH="${WEBHOOK_PATH#/}"
     WEBHOOK_PATH="${WEBHOOK_PATH%/}"
     if [[ -z "${WEBHOOK_PATH}" ]]; then
       die "Webhook 路径不能为空"
-    fi
-    if ! [[ "${WEBHOOK_PORT}" =~ ^[0-9]+$ ]]; then
-      die "Webhook 端口必须是数字"
     fi
     echo "     公网地址：填域名或完整 URL，例如 example.com 或 https://example.com/telegram"
     read -r -p "     请输入公网域名或完整 URL: " WEBHOOK_URL_INPUT || die "输入被中断，安装已取消"
@@ -176,8 +188,14 @@ case "${MODE_CHOICE:-1}" in
       die "Webhook 模式必须填写公网域名或完整 URL"
     fi
     # 只填了域名时自动补成 https://域名/路径；填了完整 URL 则直接使用。
+    # 先去掉空格；协议前缀不区分大小写比较，避免 HTTPS:// 被当成没带协议。
+    WEBHOOK_URL_INPUT="${WEBHOOK_URL_INPUT//[[:space:]]/}"
     WEBHOOK_URL="${WEBHOOK_URL_INPUT%/}"
-    if [[ "${WEBHOOK_URL}" != http://* && "${WEBHOOK_URL}" != https://* ]]; then
+    _url_lower="$(printf '%s' "${WEBHOOK_URL}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${_url_lower}" == http://* || "${_url_lower}" == https://* ]]; then
+      # 协议前缀统一成小写，主机和路径保持原样
+      WEBHOOK_URL="${_url_lower%%://*}://${WEBHOOK_URL#*://}"
+    else
       WEBHOOK_URL="https://${WEBHOOK_URL}"
     fi
     if [[ "${WEBHOOK_URL}" != */"${WEBHOOK_PATH}" ]]; then
@@ -245,17 +263,21 @@ mkdir -p "${APP_DIR}"
 # 否则从 GitHub 下载。下载失败会直接报错退出。
 install_project_file() {
   local filename="$1"
-  local source_file
-  source_file="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/${filename}"
+  local source_file=""
+  # 一行安装时脚本来自标准输入，BASH_SOURCE 为空，此时不要在当前目录找
+  # 同名文件（否则会静默装上目录里旧的 chatbot.py），直接从 GitHub 下载。
+  if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "-" ]]; then
+    source_file="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/${filename}"
+  fi
 
-  if [[ -f "${source_file}" ]]; then
+  if [[ -n "${source_file}" && -f "${source_file}" ]]; then
     info "使用本地文件：${filename}"
     cp "${source_file}" "${APP_DIR}/${filename}"
     return
   fi
 
   if [[ -z "${RAW_BASE}" ]]; then
-    die "找不到 ${filename}。如果用 GitHub 一行安装，请这样运行：sudo bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh)\""
+    die "找不到 ${filename}。如果用 GitHub 一行安装，请这样运行：curl -fsSL https://raw.githubusercontent.com/vmenzo/chatbot/main/install.sh -o /tmp/chatbot-install.sh && sudo bash /tmp/chatbot-install.sh"
   fi
 
   info "正在从 GitHub 下载：${filename}"
@@ -324,6 +346,10 @@ EnvironmentFile=${ENV_FILE}
 ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/chatbot.py
 Restart=always
 RestartSec=3
+# 打开内存和任务记账，这样 /status 才能读到真实的内存和任务数，
+# 否则 systemctl show 返回 [not set]，状态命令只能显示“未知”。
+MemoryAccounting=true
+TasksAccounting=true
 NoNewPrivileges=true
 PrivateTmp=true
 

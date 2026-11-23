@@ -2,7 +2,9 @@ import sys
 import re
 import json
 import os
+import shutil
 import subprocess as sp
+import time
 from html import escape
 from pathlib import Path
 from datetime import timedelta
@@ -37,7 +39,14 @@ def load_banned_users() -> set[int]:
     except FileNotFoundError:
         return set()
     except Exception as e:
-        print(f"[WARN] 读取封禁列表失败: {e}", file=sys.stderr, flush=True)
+        # 文件损坏时不要静默丢掉：把坏文件改名备份，留着以后恢复或排查
+        try:
+            if BAN_FILE.exists():
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                BAN_FILE.rename(BAN_FILE.with_name(f"{BAN_FILE.name}.corrupt-{stamp}"))
+        except Exception:
+            pass
+        print(f"[WARN] 读取封禁列表失败（损坏文件已备份）: {e}", file=sys.stderr, flush=True)
         return set()
 
 
@@ -62,7 +71,14 @@ def load_message_map() -> dict[str, int]:
     except FileNotFoundError:
         return {}
     except Exception as e:
-        print(f"[WARN] 读取消息映射失败: {e}", file=sys.stderr, flush=True)
+        # 文件损坏时不要静默丢掉：把坏文件改名备份，留着以后恢复或排查
+        try:
+            if MESSAGE_MAP_FILE.exists():
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                MESSAGE_MAP_FILE.rename(MESSAGE_MAP_FILE.with_name(f"{MESSAGE_MAP_FILE.name}.corrupt-{stamp}"))
+        except Exception:
+            pass
+        print(f"[WARN] 读取消息映射失败（损坏文件已备份）: {e}", file=sys.stderr, flush=True)
         return {}
 
 
@@ -143,6 +159,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id == ADMIN_ID:
+        await update.message.reply_text(
+            "💡 <b>管理员使用说明</b>\n\n"
+            "用户发来的消息会以卡片形式转给您，直接<b>回复那张卡片</b>就能回给对方。\n\n"
+            "管理命令：\n"
+            "/status 查看运行状态\n"
+            "/log 查看最近日志\n"
+            "/stop 暂停转发\n"
+            "/resume 恢复转发\n"
+            "/ban 封禁用户（回复卡片发送，或 /ban 用户ID）\n"
+            "/unban 解除封禁\n"
+            "/banlist 封禁列表\n"
+            "/who 识别被回复消息来自哪个用户\n"
+            "/restart 重启服务",
+            parse_mode='HTML',
+        )
         return
     await update.message.reply_text(
         "💡 <b>使用说明</b>\n\n"
@@ -155,21 +186,39 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id == ADMIN_ID:
-        return
     admin_name = await get_admin_display_name(context)
+    if update.message.from_user.id == ADMIN_ID:
+        await update.message.reply_text(
+            f"🛠 这里是 {admin_name} 小助手（管理员版）。\n\n"
+            "用户消息会转发给您，回复卡片即可回给对方。\n"
+            "发送 /help 查看管理命令。"
+        )
+        return
     await update.message.reply_text(
         f"🛠 这里是 {admin_name} 小助手。\n\n"
         "支持与管理员双向聊天，主要处理服务器咨询、脚本交流等相关事宜。"
     )
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id == ADMIN_ID:
-        return
     await update.message.reply_text("🏓 Pong! 机器人后台服务运行正常。")
 
 
 # ── 管理员命令 ────────────────────────────────
+
+def _systemd_bytes(value):
+    """解析 systemctl show 的字节数值。
+
+    记账不可用时返回 "[not set]"，systemd 249 对未设置项返回 2^64-1 哨兵值，
+    这两种情况都当成未知（None），别让一个字段拖垮整个 /status。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    if n < 0 or n >= 2**63:
+        return None
+    return n
+
 
 async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -189,10 +238,14 @@ async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raw[k] = v
 
         pid = raw.get("MainPID", "?")
-        mem_cur = int(raw.get("MemoryCurrent", 0)) // 1048576
-        mem_peak = int(raw.get("MemoryPeak", 0)) // 1048576
-        cpu_s = round(int(raw.get("CPUUsageNSec", 0)) / 1e9, 3)
-        tasks = raw.get("TasksCurrent", "?")
+        mem_cur = _systemd_bytes(raw.get("MemoryCurrent"))
+        mem_peak = _systemd_bytes(raw.get("MemoryPeak"))
+        cpu_raw = _systemd_bytes(raw.get("CPUUsageNSec"))
+        mem_text = f"{mem_cur // 1048576} MB" if mem_cur is not None else "未知"
+        peak_text = f"{mem_peak // 1048576} MB" if mem_peak is not None else "未知"
+        cpu_text = f"{round(cpu_raw / 1e9, 3)} 秒" if cpu_raw is not None else "未知"
+        tasks_raw = raw.get("TasksCurrent", "?")
+        tasks = tasks_raw if tasks_raw not in ("[not set]", "") else "未知"
         loaded = "已加载" if raw.get("LoadState") == "loaded" else raw.get("LoadState", "?")
         enabled = "开机自启" if raw.get("UnitFileState") == "enabled" else raw.get("UnitFileState", "?")
         active_state = raw.get("ActiveState", "?")
@@ -222,8 +275,8 @@ async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🕐 启动时间：{start_ts}\n"
             f"🆔 主进程ID：{pid}\n"
             f"🧵 任务数：{tasks}\n"
-            f"💾 内存：{mem_cur} MB（峰值 {mem_peak} MB）\n"
-            f"⚡ CPU：{cpu_s} 秒",
+            f"💾 内存：{mem_text}（峰值 {peak_text}）\n"
+            f"⚡ CPU：{cpu_text}",
             parse_mode='HTML',
         )
     except Exception as e:
@@ -231,6 +284,10 @@ async def admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
+        return
+    # 手动运行时没有 systemd，静默失败会让管理员以为重启成功了
+    if shutil.which("systemctl") is None:
+        await update.message.reply_text("❌ 当前不是 systemd 部署，无法通过 /restart 重启，请手动重启机器人。")
         return
     await update.message.reply_text("🔄 正在重启...")
     # 用 Popen 分离进程，避免自身被杀导致异常

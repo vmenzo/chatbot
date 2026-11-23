@@ -12,15 +12,26 @@ export default {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    if (env.WEBHOOK_SECRET) {
-      const headerSecret = request.headers.get("x-telegram-bot-api-secret-token");
-      const pathSecret = url.pathname.split("/").filter(Boolean).at(-1);
-      if (headerSecret !== env.WEBHOOK_SECRET && pathSecret !== env.WEBHOOK_SECRET) {
-        return new Response("Unauthorized", { status: 401 });
-      }
+    // 没有配 WEBHOOK_SECRET 时拒绝所有更新：不鉴权的 webhook 等于把机器人
+    // 的收件箱公开，任何人都能 POST 伪造消息。Secret 由 deploy.sh 写入，
+    // 留空会自动生成，正常部署一定有值。
+    if (!env.WEBHOOK_SECRET) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+    const headerSecret = request.headers.get("x-telegram-bot-api-secret-token");
+    const pathSecret = url.pathname.split("/").filter(Boolean).at(-1);
+    // Secret 既可以放在请求头的 secret_token 里，也可以放在 URL 路径末尾；
+    // 轮换 Secret 时 URL 和 secret_token 要一起换。
+    if (headerSecret !== env.WEBHOOK_SECRET && pathSecret !== env.WEBHOOK_SECRET) {
+      return new Response("Unauthorized", { status: 401 });
     }
 
-    const update = await request.json();
+    let update;
+    try {
+      update = await request.json();
+    } catch {
+      return new Response("Bad Request", { status: 400 });
+    }
     await handleUpdate(update, env);
     return json({ ok: true });
   },
@@ -140,6 +151,8 @@ async function handleAdminCommand(command, message, env) {
 
 async function handleUserMessage(message, env) {
   const adminId = Number(env.TELEGRAM_ADMIN_ID);
+  // 管理员自己发的非回复消息忽略，不当成用户来信，否则会转发回给自己
+  if (message.from.id === adminId) return;
   if (await getJson(env, "paused", false)) return;
   if ((await getBannedUsers(env)).includes(message.from.id)) return;
 
@@ -153,15 +166,23 @@ async function handleUserMessage(message, env) {
   if (content) adminText += `\n${escapeHtml(content)}`;
 
   const card = await sendMessage(env, adminId, adminText);
+  // 发送失败时直接返回，不要碰 card.result（失败时它是 undefined），
+  // 否则抛错会让 Worker 返回 500，Telegram 反复重推同一条更新
+  if (!card.ok) return;
   await rememberAdminMessage(env, card.result.message_id, message.from.id);
 
   if (!message.text) {
     const copied = await copyMessage(env, adminId, message.chat.id, message.message_id);
+    if (!copied.ok) return;
     await rememberAdminMessage(env, copied.result.message_id, message.from.id);
   }
 }
 
 async function handleAdminReply(message, env) {
+  // 只有回复机器人自己发的消息才转发：管理员回复自己发的消息时不处理，
+  // 否则会误找目标用户。Bot 的数字 ID 就是 Token 冒号前面的那串数字。
+  const botId = Number(String(env.TELEGRAM_BOT_TOKEN || "").split(":")[0]);
+  if (!message.reply_to_message || message.reply_to_message.from.id !== botId) return;
   const targetId = await extractTargetId(message.reply_to_message, env);
   if (!targetId) {
     await sendMessage(env, message.chat.id, "❌ 找不到目标用户ID，请回复机器人转发的用户卡片或媒体消息。");

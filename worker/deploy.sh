@@ -8,12 +8,13 @@
 #
 #   1. 检查运行环境（Node.js、npm、curl）
 #   2. 收集必要配置（Worker 名称、Bot Token、管理员 ID、域名）
-#   3. 安装依赖（Wrangler，Cloudflare 官方命令行工具）
-#   4. 登录 Cloudflare 账号（第一次需要浏览器授权）
-#   5. 查找或创建 KV namespace（用来保存封禁列表、消息映射、暂停状态）
-#   6. 生成 wrangler.toml 并写入 Worker secrets
-#   7. 部署 Worker 到 Cloudflare
-#   8. 设置 Telegram webhook 并同步命令菜单
+#   3. 部署前确认（先给你看一张汇总表，确认了才动手）
+#   4. 安装依赖（Wrangler，Cloudflare 官方命令行工具）
+#   5. 登录 Cloudflare 账号（第一次需要浏览器授权）
+#   6. 查找或创建 KV namespace（用来保存封禁列表、消息映射、暂停状态）
+#   7. 生成 wrangler.toml 并写入 Worker secrets
+#   8. 部署 Worker 到 Cloudflare
+#   9. 设置 Telegram webhook 并同步命令菜单
 #
 # 适用系统：macOS / Linux / Windows（WSL），需要 Node.js 18+ 和 npm。
 #
@@ -78,6 +79,12 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 if ! command -v npm >/dev/null 2>&1; then
   die "没有找到 npm，请先安装 Node.js 18+（npm 随 Node.js 一起安装），再重新运行"
+fi
+# Wrangler 4 要求 Node.js 18+，版本太低到装依赖时才报错，不如现在就说清楚。
+NODE_VERSION="$(node --version 2>/dev/null || echo "v0")"
+NODE_MAJOR="$(printf '%s' "${NODE_VERSION}" | sed 's/^v//; s/\..*//')"
+if ! [[ "${NODE_MAJOR}" =~ ^[0-9]+$ ]] || (( NODE_MAJOR < 18 )); then
+  die "Node.js 版本太低：当前是 ${NODE_VERSION}，需要 18+（https://nodejs.org）"
 fi
 ok "已找到 Node.js $(node --version) 和 npm"
 
@@ -156,7 +163,8 @@ echo "     用来校验推送确实来自 Telegram。留空则自动生成一串
 read -r -s -p "     Webhook Secret [留空自动生成]: " WEBHOOK_SECRET || die "输入被中断，部署已取消"
 echo
 if [[ -z "${WEBHOOK_SECRET}" ]]; then
-  WEBHOOK_SECRET="$(openssl rand -hex 24 2>/dev/null || date +%s%N)"
+  # openssl 不可用时用 /dev/urandom 兜底（macOS 的 date 不支持 %N，别用它拼随机数）
+  WEBHOOK_SECRET="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   info "已自动生成 Webhook Secret"
 fi
 if ! [[ "${WEBHOOK_SECRET}" =~ ^[A-Za-z0-9_-]{1,256}$ ]]; then
@@ -174,6 +182,16 @@ read -r -p "     Worker 域名 [留空使用 workers.dev]: " WORKER_HOST || die 
 WORKER_HOST="${WORKER_HOST#https://}"
 WORKER_HOST="${WORKER_HOST#http://}"
 WORKER_HOST="${WORKER_HOST%/}"
+WORKER_HOST="${WORKER_HOST//[[:space:]]/}"
+# 域名只能是纯主机名，不能带路径、端口或空格，否则写进 routes 到部署时才报错
+if [[ -n "${WORKER_HOST}" ]]; then
+  if [[ "${WORKER_HOST}" == */* || "${WORKER_HOST}" == *:* ]]; then
+    die "Worker 域名只能填纯主机名（例如 bot.example.com），不能带路径或端口"
+  fi
+  if ! [[ "${WORKER_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    die "Worker 域名格式不对，请填写纯主机名（例如 bot.example.com）"
+  fi
+fi
 
 # ── 步骤 3：部署前确认 ──────────────────────────────────────────────
 step "步骤 3/9：部署前确认"
@@ -213,7 +231,8 @@ WRANGLER="${SCRIPT_DIR}/node_modules/.bin/wrangler"
 if [[ ! -x "${WRANGLER}" ]]; then
   die "没有找到本地 Wrangler，请删除 node_modules 后重新运行"
 fi
-ok "依赖就绪：Wrangler $("${WRANGLER}" --version 2>/dev/null | head -n 1 || echo "（版本未知）")"
+WRANGLER_VERSION="$("${WRANGLER}" --version 2>/dev/null | head -n 1 || true)"
+ok "依赖就绪：Wrangler ${WRANGLER_VERSION:-（版本未知）}"
 
 # ── 步骤 5：登录 Cloudflare ─────────────────────────────────────────
 step "步骤 5/9：登录 Cloudflare"
@@ -339,7 +358,8 @@ fi
 if [[ -z "${WORKER_URL}" ]]; then
   echo "  无法自动识别 Worker URL，部署本身可能已成功。"
   echo "  请去 Cloudflare 控制台查看 Worker 地址，再手动设置 Telegram webhook。"
-  echo "  Webhook Secret: ${WEBHOOK_SECRET}"
+  echo "  Webhook Secret 已经以加密 secret 的形式保存在 Cloudflare，不会显示在这里；"
+  echo "  如需更换，重新运行 deploy.sh（留空会自动生成新的）即可。"
   exit 1
 fi
 ok "Worker 已部署：${WORKER_URL}"
@@ -425,7 +445,7 @@ echo
 echo "  常用命令："
 echo "    查看日志：  npx wrangler tail"
 echo "    重新部署：  bash deploy.sh（改代码、改配置后都用它）"
-echo "    删除 Worker：npx wrangler delete ${WORKER_NAME}"
+echo "    删除 Worker：npx wrangler delete --name ${WORKER_NAME}"
 echo
 echo "  注意："
 echo "    - 部署完成后本地电脑可以关机，机器人运行在 Cloudflare 上。"
