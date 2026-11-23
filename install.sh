@@ -72,6 +72,35 @@ die() {
   exit 1
 }
 
+# 校验本机监听地址：IPv4 逐段 0-255；含冒号的按 IPv6 校验；其他按主机名校验。
+validate_listen_address() {
+  local addr="$1"
+  # IPv6：只含十六进制数字、冒号和点（内嵌 IPv4），且至少含两个冒号。
+  if [[ "${addr}" == *:* ]]; then
+    [[ "${addr}" =~ ^[0-9a-fA-F:.]+$ ]] || return 1
+    [[ "${addr}" == *"::"* || "${addr}" == *:*:* ]] || return 1
+    return 0
+  fi
+  # IPv4：四段数字，每段 0-255。
+  if [[ "${addr}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    local IFS='.'
+    local -a parts
+    read -ra parts <<< "${addr}"
+    local p
+    for p in "${parts[@]}"; do
+      (( 10#${p} >= 0 && 10#${p} <= 255 )) || return 1
+    done
+    return 0
+  fi
+  # 只含数字和点、却不是合法 IPv4 的（如 1.2.3、999.999.999.999），
+  # 很可能是写错的 IP，不要当成主机名放过。
+  if [[ "${addr}" =~ ^[0-9.]+$ ]]; then
+    return 1
+  fi
+  # 主机名：字母数字开头结尾，中间可含连字符和点。
+  [[ "${addr}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+}
+
 # ── 步骤 1：检查运行环境 ────────────────────────────────────────────
 step "步骤 1/8：检查运行环境"
 
@@ -170,12 +199,15 @@ case "${MODE_CHOICE:-1}" in
     WEBHOOK_LISTEN="${WEBHOOK_LISTEN//[[:space:]]/}"
     WEBHOOK_PORT="${WEBHOOK_PORT//[[:space:]]/}"
     WEBHOOK_PATH="${WEBHOOK_PATH//[[:space:]]/}"
-    if ! [[ "${WEBHOOK_LISTEN}" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    if ! validate_listen_address "${WEBHOOK_LISTEN}"; then
       die "本机监听地址格式不对，请填写 IP 或主机名"
     fi
-    if ! [[ "${WEBHOOK_PORT}" =~ ^[0-9]+$ ]] || (( WEBHOOK_PORT < 1 || WEBHOOK_PORT > 65535 )); then
+    # 用 10# 前缀按十进制求值，避免 08080 被当成八进制报错；同时去掉前导零，
+    # 写进配置的是 8080 这样的规范值。
+    if ! [[ "${WEBHOOK_PORT}" =~ ^[0-9]+$ ]] || (( 10#${WEBHOOK_PORT} < 1 || 10#${WEBHOOK_PORT} > 65535 )); then
       die "Webhook 端口必须是 1-65535 的数字"
     fi
+    WEBHOOK_PORT="$((10#${WEBHOOK_PORT}))"
     # 去掉路径首尾多余的斜杠，例如 "/telegram/" 写成 "telegram"。
     WEBHOOK_PATH="${WEBHOOK_PATH#/}"
     WEBHOOK_PATH="${WEBHOOK_PATH%/}"
@@ -198,14 +230,30 @@ case "${MODE_CHOICE:-1}" in
     else
       WEBHOOK_URL="https://${WEBHOOK_URL}"
     fi
-    if [[ "${WEBHOOK_URL}" != */"${WEBHOOK_PATH}" ]]; then
+    # 尾部路径比较不区分大小写：用户填了 /Telegram 时不再追加 /telegram，
+    # 否则会拼出双倍路径，Telegram 推过去会 404。路径原文保持不动。
+    _webhook_path_lower="$(printf '%s' "${WEBHOOK_PATH}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${_url_lower}" != */"${_webhook_path_lower}" ]]; then
       WEBHOOK_URL="${WEBHOOK_URL}/${WEBHOOK_PATH}"
     fi
     if [[ "${WEBHOOK_URL}" != https://* ]]; then
       die "Webhook URL 必须是 HTTPS 地址，Telegram 不接受 HTTP"
     fi
     echo "     Webhook Secret（可选）：用于校验推送确实来自 Telegram，留空则不校验。"
-    read -r -s -p "     Webhook Secret [留空不设置]: " WEBHOOK_SECRET || die "输入被中断，安装已取消"
+    while true; do
+      read -r -s -p "     Webhook Secret [留空不设置]: " WEBHOOK_SECRET || die "输入被中断，安装已取消"
+      echo
+      # 去掉所有空白字符，避免复制粘贴时多带了空格导致部署后鉴权失败。
+      WEBHOOK_SECRET="${WEBHOOK_SECRET//[[:space:]]/}"
+      if [[ -z "${WEBHOOK_SECRET}" ]]; then
+        break
+      fi
+      # 格式与 deploy.sh 一致：字母、数字、下划线、连字符，1-256 位。
+      if [[ "${WEBHOOK_SECRET}" =~ ^[A-Za-z0-9_-]{1,256}$ ]]; then
+        break
+      fi
+      warn "Webhook Secret 格式不对，只能用字母、数字、下划线和连字符（1-256 位），请重新输入"
+    done
     echo
     ;;
   *)
@@ -266,8 +314,19 @@ install_project_file() {
   local source_file=""
   # 一行安装时脚本来自标准输入，BASH_SOURCE 为空，此时不要在当前目录找
   # 同名文件（否则会静默装上目录里旧的 chatbot.py），直接从 GitHub 下载。
+  # 只有脚本所在目录像项目根目录时才用本地文件：至少要有两个项目标记文件
+  #（README.md、requirements.txt、worker/deploy.sh）。否则（比如脚本被下载
+  # 到 /tmp，旁边恰好有个旧 chatbot.py）跳过本地查找，从 GitHub 下载，
+  # 避免静默装上过期的旧文件。
   if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "-" ]]; then
-    source_file="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/${filename}"
+    local script_dir markers=0
+    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+    [[ -f "${script_dir}/README.md" ]] && markers=$((markers + 1))
+    [[ -f "${script_dir}/requirements.txt" ]] && markers=$((markers + 1))
+    [[ -f "${script_dir}/worker/deploy.sh" ]] && markers=$((markers + 1))
+    if (( markers >= 2 )); then
+      source_file="${script_dir}/${filename}"
+    fi
   fi
 
   if [[ -n "${source_file}" && -f "${source_file}" ]]; then

@@ -461,16 +461,40 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         content = update.message.text or update.message.caption
         admin_text += f"\n{escape(content)}"
 
-    admin_card = await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode='HTML')
+    try:
+        admin_card = await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode='HTML')
+    except Exception as e:
+        # 发送失败不要直接丢掉消息：记日志，并尽量通知管理员转发失败。
+        #（与 Worker 版发送后检查 .ok 的做法对等。）
+        print(f"[WARN] 转发给管理员失败（用户 {user.id}）: {e}", file=sys.stderr, flush=True)
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"⚠️ 收到用户 {user.id} 的消息，但转发失败：{e}",
+            )
+        except Exception:
+            pass
+        return
     remember_admin_message(context, admin_card.message_id, user.id)
 
     # 媒体消息：卡片下发原文件
     if not update.message.text:
-        copied = await context.bot.copy_message(
-            chat_id=ADMIN_ID,
-            from_chat_id=user.id,
-            message_id=update.message.message_id,
-        )
+        try:
+            copied = await context.bot.copy_message(
+                chat_id=ADMIN_ID,
+                from_chat_id=user.id,
+                message_id=update.message.message_id,
+            )
+        except Exception as e:
+            print(f"[WARN] 转发媒体给管理员失败（用户 {user.id}）: {e}", file=sys.stderr, flush=True)
+            try:
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"⚠️ 用户 {user.id} 的媒体消息转发失败：{e}",
+                )
+            except Exception:
+                pass
+            return
         remember_admin_message(context, copied.message_id, user.id)
 
 

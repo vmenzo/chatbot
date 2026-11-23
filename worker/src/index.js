@@ -259,7 +259,15 @@ async function getJson(env, key, fallback) {
   if (!value) return fallback;
   try {
     return JSON.parse(value);
-  } catch {
+  } catch (e) {
+    // 损坏的值不要静默丢掉：先备份到带时间戳的键，再返回 fallback。
+    //（与 Python 版损坏文件改名备份的做法对等。）
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupKey = `${key}.corrupt-${stamp}`;
+    try {
+      await env.CHATBOT_KV.put(backupKey, value);
+    } catch {}
+    console.warn(`[WARN] KV key "${key}" 解析失败，损坏值已备份到 "${backupKey}": ${e.message}`);
     return fallback;
   }
 }
@@ -281,12 +289,24 @@ async function copyMessage(env, chatId, fromChatId, messageId) {
 }
 
 async function telegram(env, method, payload) {
-  const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  return response.json();
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // 网络层失败（DNS、连接中断等）：按发送失败处理，调用方按 .ok=false 处理。
+    return { ok: false };
+  }
+  try {
+    return await response.json();
+  } catch {
+    // Telegram 返回了非 JSON（如 502 错误页）：按发送失败处理，
+    // 避免抛错导致 Worker 返回 500、Telegram 反复重推同一条更新。
+    return { ok: false };
+  }
 }
 
 function escapeHtml(value) {

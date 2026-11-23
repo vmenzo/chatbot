@@ -281,8 +281,9 @@ if [[ -z "${KV_ID}" ]]; then
     die "创建 KV namespace 失败，请检查上面的输出"
   fi
   echo "${KV_OUTPUT}"
-  # 先按完整格式匹配，再用宽松格式兜底。
-  KV_ID="$(printf '%s\n' "${KV_OUTPUT}" | sed -n 's/.*binding = "CHATBOT_KV", id = "\([^"]*\)".*/\1/p' | tail -n 1)"
+  # wrangler v4 的输出里 binding 和 id 在两行，同一行匹配不上：
+  # 先跨行匹配（binding 行的下一行取 id），再用宽松格式兜底。
+  KV_ID="$(printf '%s\n' "${KV_OUTPUT}" | grep -A1 'binding = "CHATBOT_KV"' | sed -n 's/.*id = "\([^"]*\)".*/\1/p' | tail -n 1 || true)"
   if [[ -z "${KV_ID}" ]]; then
     KV_ID="$(printf '%s\n' "${KV_OUTPUT}" | sed -n 's/.*id = "\([^"]*\)".*/\1/p' | tail -n 1)"
   fi
@@ -372,12 +373,17 @@ step "步骤 9/9：设置 Telegram webhook 与命令菜单"
 WEBHOOK_URL="${WORKER_URL%/}/${WEBHOOK_SECRET}"
 
 info "正在设置 Telegram webhook：${WORKER_URL%/}/<secret>"
+# secret_token 不放命令行参数（ps 可见），写进临时文件再用 --data 引用，
+# 用完立即删除；URL 仍用 --data-urlencode 编码后传参。
+WEBHOOK_BODY_FILE="$(mktemp)"
+printf 'secret_token=%s&drop_pending_updates=true' "${WEBHOOK_SECRET}" > "${WEBHOOK_BODY_FILE}"
 if ! WEBHOOK_RESPONSE="$(curl -fsS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
   --data-urlencode "url=${WEBHOOK_URL}" \
-  -d "secret_token=${WEBHOOK_SECRET}" \
-  -d "drop_pending_updates=true")"; then
+  --data @"${WEBHOOK_BODY_FILE}")"; then
+  rm -f "${WEBHOOK_BODY_FILE}"
   die "设置 Telegram webhook 失败，请检查 Bot Token 和 Worker URL 是否正确"
 fi
+rm -f "${WEBHOOK_BODY_FILE}"
 echo "${WEBHOOK_RESPONSE}"
 if ! printf '%s' "${WEBHOOK_RESPONSE}" | grep -q '"ok":true'; then
   die "Telegram setWebhook 返回失败，请检查 Bot Token 和 Worker URL"
